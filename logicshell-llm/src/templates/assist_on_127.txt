@@ -1,0 +1,10 @@
+Command not found on {os_family} ({arch}) (exit code 127):
+  {failed_cmd}
+
+Suggest the correct command or the package needed to install it.
+Respond with ONLY the corrected command, no explanation, no code fences.
+
+Working directory: {cwd}
+PATH entries: {path_dirs}
+
+Correction:
