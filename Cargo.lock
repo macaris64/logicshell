@@ -650,6 +650,7 @@ name = "logicshell-core"
 version = "0.1.0"
 dependencies = [
  "mockall",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

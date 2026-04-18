@@ -4,7 +4,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
-[![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](#running-tests--coverage)
+[![Coverage](https://img.shields.io/badge/coverage-98%25-brightgreen)](#running-tests--coverage)
 
 ---
 
@@ -16,7 +16,7 @@ LogicShell is a **library-first** Rust framework that sits between a host applic
 - **Pre-execution hooks** — run configurable shell scripts before every dispatch, with per-hook timeouts and fail-fast semantics.
 - **Append-only audit log** — every dispatch writes a NDJSON record (timestamp, cwd, argv, safety decision, optional note) that survives process restarts.
 - **Configuration discovery** — TOML config file resolved via `LOGICSHELL_CONFIG`, project walk-up, XDG, or built-in defaults, with strict unknown-key rejection.
-- **Safety policy engine** _(Phase 7, in progress)_ — `strict` / `balanced` / `loose` modes with deny/allow prefix lists and high-risk pattern matching.
+- **Safety policy engine** — `strict` / `balanced` / `loose` modes with deny/allow prefix lists, high-risk regex patterns, sudo heuristics, and a four-category risk taxonomy (destructive filesystem, privilege elevation, network, package).
 - **Local LLM bridge** _(Phases 8–10, planned)_ — Ollama-backed natural-language-to-command translation, gated behind safety policy and explicit user confirmation.
 
 LogicShell is **not** a POSIX shell replacement. It is an embeddable dispatcher + policy + optional-AI stack that host applications link as a crate.
@@ -28,12 +28,12 @@ LogicShell is **not** a POSIX shell replacement. It is an embeddable dispatcher 
 | Milestone | Phases | Status |
 |:----------|:-------|:-------|
 | **M1** — Dispatcher, config, CI | 1–5 | ✅ Complete |
-| **M2** — Safety engine, audit, hooks | 6–7 | 🔄 Phase 6 complete, Phase 7 next |
+| **M2** — Safety engine, audit, hooks | 6–7 | ✅ Complete |
 | **M3** — LLM bridge, Ollama | 8–10 | 📋 Planned |
 | **M4** — Ratatui TUI | — | 📋 Planned |
 | **M5** — Remote LLM providers | — | 📋 Planned |
 
-**Current:** 206 tests · **97.6% line coverage** · `cargo clippy -D warnings` clean
+**Current:** 294 tests · **98%+ line coverage** · `cargo clippy -D warnings` clean
 
 ---
 
@@ -47,7 +47,7 @@ Host application / CLI
         │
         ├─► HookRunner (pre_exec hooks, per-hook timeout)
         │
-        ├─► SafetyPolicyEngine [Phase 7] ─► AuditSink
+        ├─► SafetyPolicyEngine ──────────► AuditSink
         │
         ├─► ProcessDispatcher (tokio::process, stdout cap)
         │
@@ -150,6 +150,7 @@ Expected output:
 [Phase 6: HookRunner] success, nonzero exit, timeout OK
 [Phase 6: AuditSink] 3 NDJSON records, flush-on-drop, disabled no-op OK
 [Phase 6: LogicShell façade] hook ran, audit written, façade.audit() appended, failing hook aborted OK
+[Phase 7: SafetyPolicyEngine] ls allow, rm -rf / deny, curl|bash strict-deny/balanced-confirm, sudo rm strict-confirm/loose-allow, dispatch blocked OK
 
 ✓ All features verified OK
 ```
@@ -228,6 +229,7 @@ use logicshell_core::{
     LogicShell,
     config::Config,
     audit::{AuditRecord, AuditDecision},
+    Decision, SafetyPolicyEngine,
 };
 
 #[tokio::main]
@@ -238,7 +240,12 @@ async fn main() {
 
     let ls = LogicShell::with_config(config);
 
-    // Dispatch a command; pre-exec hooks run automatically
+    // Query the safety engine directly (sync, pure)
+    let (assessment, decision) = ls.evaluate_safety(&["rm", "-rf", "/"]);
+    assert_eq!(decision, Decision::Deny);
+    println!("risk score: {}, level: {:?}", assessment.score, assessment.level);
+
+    // Dispatch a command; safety check + pre-exec hooks run automatically
     let exit_code = ls.dispatch(&["git", "status"]).await.expect("dispatch failed");
     println!("exit: {exit_code}");
 
@@ -317,16 +324,6 @@ Run arbitrary scripts before every dispatch — health checks, secret injection,
 
 ## Next steps (roadmap)
 
-### Phase 7 — Safety policy engine
-
-Implement `SafetyPolicyEngine`: sync, pure, deterministic.
-
-- Risk taxonomy: destructive filesystem, privilege elevation, network, package/system changes.
-- `strict` / `balanced` / `loose` modes with configurable deny/allow prefix lists and high-risk regex patterns.
-- Outputs `RiskAssessment { level, score, reasons }` and `Decision::{Allow, Deny, Confirm}`.
-- Golden tests: `rm -rf /`, `curl | bash`, `sudo rm`, `ls` across all modes.
-- Wire into `LogicShell::dispatch` to replace the current stub.
-
 ### Phase 8 — LLM context + prompt composer
 
 - `SystemContextProvider` — reads OS family, architecture, abbreviated PATH, cwd.
@@ -377,6 +374,7 @@ logicshell/
 │   │   ├── dispatcher.rs     # Async process dispatcher (Phase 5)
 │   │   ├── audit.rs          # Append-only NDJSON audit sink (Phase 6)
 │   │   ├── hooks.rs          # Pre-exec hook runner (Phase 6)
+│   │   ├── safety.rs         # Safety policy engine (Phase 7)
 │   │   ├── error.rs          # LogicShellError enum (Phase 2)
 │   │   └── config/
 │   │       ├── mod.rs        # load() + validate()
