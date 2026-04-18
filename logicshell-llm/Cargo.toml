@@ -1,0 +1,27 @@
+[package]
+name = "logicshell-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "LogicShell LLM bridge: context, composer, Ollama client"
+
+[features]
+default = []
+# Enables the HTTP-backed OllamaLlmClient; without this, only types/traits are compiled
+ollama = ["dep:reqwest"]
+
+[dependencies]
+logicshell-core = { path = "../logicshell-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+mockall = { workspace = true }
+mockito = "1"
+tempfile = { workspace = true }

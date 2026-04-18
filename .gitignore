@@ -1,0 +1,35 @@
+# --- Documentation (project docs live under docs/) ---
+docs/
+
+# --- Rust / Cargo ---
+debug/
+target/
+**/*.rs.bk
+*.pdb
+
+# --- IDE & editors ---
+.idea/
+*.iml
+.fleet/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.code-workspace
+
+.vscode/
+
+# --- Cursor ---
+# Local session/cache; allow team rules to stay tracked
+.cursor/*
+!.cursor/rules/
+
+# --- Claude (Claude Code / Anthropic) ---
+.claude/settings.local.json
+**/.claude/**/*.local.json
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db

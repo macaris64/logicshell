@@ -1,0 +1,9 @@
+[default]
+workspace = true
+all-features = true
+# Exclude thin binary shims and generated code from the coverage gate
+exclude-files = ["*/main.rs"]
+# Fail CI if coverage drops below this threshold (Framework PRD §11.4)
+fail-under = 90
+out = ["Html", "Xml"]
+output-dir = "target/coverage"

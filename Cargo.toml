@@ -1,0 +1,21 @@
+[workspace]
+members = ["logicshell-core", "logicshell-llm"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/logicshell/logicshell"
+description = "AI-augmented OS configuration and execution framework"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+tracing = "0.1"
+mockall = "0.13"
+tempfile = "3"
