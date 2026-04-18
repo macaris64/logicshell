@@ -1,5 +1,6 @@
 // logicshell-core: dispatcher, config, safety, audit, hooks — no HTTP
 
+pub mod config;
 pub mod error;
 pub use error::{LogicShellError, Result};
 
