@@ -1,34 +1,47 @@
 // logicshell-core: dispatcher, config, safety, audit, hooks — no HTTP
 
 pub mod config;
+pub mod dispatcher;
 pub mod error;
 pub use config::discovery::{discover, find_config_path};
 pub use error::{LogicShellError, Result};
+
+use config::Config;
+use dispatcher::{DispatchOptions, Dispatcher};
 
 /// Top-level façade that coordinates configuration, safety, dispatch, and audit.
 ///
 /// Hosts link this crate and call methods here; the TUI and CLI are thin layers
 /// over the same boundaries (Framework PRD §3.1, §11.1).
 pub struct LogicShell {
-    _private: (),
+    config: Config,
 }
 
 impl LogicShell {
-    /// Create a new `LogicShell` instance.
-    ///
-    /// Later phases will accept a validated `Config`; for now the constructor
-    /// is a zero-argument stub so the façade can be imported and tested.
+    /// Create a new `LogicShell` instance with built-in configuration defaults.
     pub fn new() -> Self {
-        Self { _private: () }
+        Self {
+            config: Config::default(),
+        }
     }
 
-    /// Stub: spawn and await a child process by argv.
+    /// Create a `LogicShell` instance from a validated [`Config`].
+    pub fn with_config(config: Config) -> Self {
+        Self { config }
+    }
+
+    /// Spawn a child process by argv and return its exit code — FR-01–04.
     ///
-    /// Full implementation: Phase 5 (Process dispatcher — FR-01–04).
-    pub async fn dispatch(&self, _argv: &[&str]) -> Result<i32> {
-        Err(LogicShellError::Dispatch(
-            "not yet implemented (phase 5)".into(),
-        ))
+    /// Uses `limits.max_stdout_capture_bytes` from the active config (NFR-08).
+    /// A nonzero exit code is returned as `Ok(n)`, not an error.
+    pub async fn dispatch(&self, argv: &[&str]) -> Result<i32> {
+        let d = Dispatcher::new(&self.config.limits);
+        let opts = DispatchOptions {
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            ..DispatchOptions::default()
+        };
+        let output = d.dispatch(opts).await?;
+        Ok(output.exit_code)
     }
 
     /// Stub: evaluate a command through the safety policy engine.
@@ -76,12 +89,31 @@ mod tests {
         let _ls = LogicShell::default();
     }
 
-    /// Stub dispatch returns a `Dispatch` error, not a panic — NFR-06
+    /// `with_config` constructs from an explicit config — Phase 5.
+    #[test]
+    fn facade_with_config() {
+        let cfg = Config::default();
+        let _ls = LogicShell::with_config(cfg);
+    }
+
+    /// Phase 5: dispatch runs a real command and returns its exit code — FR-01
     #[tokio::test]
-    async fn dispatch_stub_returns_error() {
+    async fn dispatch_runs_real_command() {
         let ls = LogicShell::new();
-        let result = ls.dispatch(&["ls"]).await;
-        assert!(matches!(result, Err(LogicShellError::Dispatch(_))));
+        // `true` always exits 0 on Unix
+        let result = ls.dispatch(&["true"]).await;
+        assert!(result.is_ok(), "dispatch returned Err: {result:?}");
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    /// Phase 5: dispatch propagates nonzero exit — FR-03
+    #[tokio::test]
+    async fn dispatch_propagates_nonzero_exit() {
+        let ls = LogicShell::new();
+        // `false` always exits 1 on Unix
+        let result = ls.dispatch(&["false"]).await;
+        assert!(result.is_ok(), "expected Ok(1), got Err: {result:?}");
+        assert_eq!(result.unwrap(), 1);
     }
 
     /// Stub safety returns a `Safety` error, not a panic — NFR-06
