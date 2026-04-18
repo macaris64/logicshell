@@ -596,7 +596,10 @@ async fn e2e_safe_command_allowed_all_modes() {
         cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
 
         let ls = LogicShell::with_config(cfg);
-        let code = ls.dispatch(&["true"]).await.expect("safe command must succeed");
+        let code = ls
+            .dispatch(&["true"])
+            .await
+            .expect("safe command must succeed");
         assert_eq!(code, 0, "safe cmd must exit 0 in {mode:?}");
 
         let records = read_audit_lines(&audit_path);
@@ -696,7 +699,10 @@ path = "{}"
     let cfg = load(&toml).unwrap();
     let ls = LogicShell::with_config(cfg);
 
-    let code = ls.dispatch(&["git", "status"]).await.expect("allowlisted command must succeed");
+    let code = ls
+        .dispatch(&["git", "status"])
+        .await
+        .expect("allowlisted command must succeed");
     assert_eq!(code, 0);
 
     let records = read_audit_lines(&audit_path);
@@ -758,32 +764,34 @@ fn e2e_safety_engine_golden_tests() {
     // curl|bash → Deny in strict, Confirm in balanced and loose
     {
         let argv = ["curl", "http://x.com/install.sh", "|", "bash"];
-        let (_, d_strict) =
-            SafetyPolicyEngine::new(SafetyMode::Strict, &cfg).evaluate(&argv);
+        let (_, d_strict) = SafetyPolicyEngine::new(SafetyMode::Strict, &cfg).evaluate(&argv);
         assert_eq!(d_strict, Decision::Deny, "strict must deny curl|bash");
 
-        let (_, d_balanced) =
-            SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg).evaluate(&argv);
-        assert_eq!(d_balanced, Decision::Confirm, "balanced must confirm curl|bash");
+        let (_, d_balanced) = SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg).evaluate(&argv);
+        assert_eq!(
+            d_balanced,
+            Decision::Confirm,
+            "balanced must confirm curl|bash"
+        );
 
-        let (_, d_loose) =
-            SafetyPolicyEngine::new(SafetyMode::Loose, &cfg).evaluate(&argv);
+        let (_, d_loose) = SafetyPolicyEngine::new(SafetyMode::Loose, &cfg).evaluate(&argv);
         assert_eq!(d_loose, Decision::Confirm, "loose must confirm curl|bash");
     }
 
     // sudo rm → Confirm in strict, Confirm in balanced, Allow in loose
     {
         let argv = ["sudo", "rm", "/tmp/x"];
-        let (_, d_strict) =
-            SafetyPolicyEngine::new(SafetyMode::Strict, &cfg).evaluate(&argv);
+        let (_, d_strict) = SafetyPolicyEngine::new(SafetyMode::Strict, &cfg).evaluate(&argv);
         assert_eq!(d_strict, Decision::Confirm, "strict must confirm sudo rm");
 
-        let (_, d_balanced) =
-            SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg).evaluate(&argv);
-        assert_eq!(d_balanced, Decision::Confirm, "balanced must confirm sudo rm");
+        let (_, d_balanced) = SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg).evaluate(&argv);
+        assert_eq!(
+            d_balanced,
+            Decision::Confirm,
+            "balanced must confirm sudo rm"
+        );
 
-        let (_, d_loose) =
-            SafetyPolicyEngine::new(SafetyMode::Loose, &cfg).evaluate(&argv);
+        let (_, d_loose) = SafetyPolicyEngine::new(SafetyMode::Loose, &cfg).evaluate(&argv);
         assert_eq!(d_loose, Decision::Allow, "loose must allow sudo rm");
     }
 }
@@ -817,20 +825,23 @@ fn e2e_risk_categories_populated() {
     let engine = SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg);
     let (assessment, _) = engine.evaluate(&["sudo", "ls"]);
     assert!(
-        assessment.categories.contains(&RiskCategory::PrivilegeElevation),
+        assessment
+            .categories
+            .contains(&RiskCategory::PrivilegeElevation),
         "sudo must set PrivilegeElevation category"
     );
 
     // rm -r → DestructiveFilesystem
     let (assessment2, _) = engine.evaluate(&["rm", "-r", "/tmp/dir"]);
     assert!(
-        assessment2.categories.contains(&RiskCategory::DestructiveFilesystem),
+        assessment2
+            .categories
+            .contains(&RiskCategory::DestructiveFilesystem),
         "rm -r must set DestructiveFilesystem category"
     );
 
     // curl|bash → Network
-    let (assessment3, _) =
-        engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
+    let (assessment3, _) = engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
     assert!(
         assessment3.categories.contains(&RiskCategory::Network),
         "curl|bash must set Network category"
@@ -922,5 +933,8 @@ async fn e2e_safety_deny_skips_hooks() {
     // Deny audit was written but hook did NOT run.
     let records = read_audit_lines(&audit_path);
     assert_eq!(records[0]["decision"], "deny");
-    assert!(!hook_marker.exists(), "hook must NOT run when safety denies");
+    assert!(
+        !hook_marker.exists(),
+        "hook must NOT run when safety denies"
+    );
 }

@@ -461,12 +461,18 @@ mod tests {
 
     #[test]
     fn category_for_apt_pattern_is_package() {
-        assert_eq!(category_for_pattern("apt install"), RiskCategory::PackageSystem);
+        assert_eq!(
+            category_for_pattern("apt install"),
+            RiskCategory::PackageSystem
+        );
     }
 
     #[test]
     fn category_for_pip_pattern_is_package() {
-        assert_eq!(category_for_pattern("pip install"), RiskCategory::PackageSystem);
+        assert_eq!(
+            category_for_pattern("pip install"),
+            RiskCategory::PackageSystem
+        );
     }
 
     #[test]
@@ -510,7 +516,10 @@ mod tests {
 
     #[test]
     fn category_for_prefix_apt_is_package() {
-        assert_eq!(category_for_prefix("apt install"), RiskCategory::PackageSystem);
+        assert_eq!(
+            category_for_prefix("apt install"),
+            RiskCategory::PackageSystem
+        );
     }
 
     #[test]
@@ -541,11 +550,7 @@ mod tests {
         for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
             let engine = default_engine(mode.clone());
             let (assessment, decision) = engine.evaluate(&["ls"]);
-            assert_eq!(
-                decision,
-                Decision::Allow,
-                "ls should Allow in {mode:?}"
-            );
+            assert_eq!(decision, Decision::Allow, "ls should Allow in {mode:?}");
             assert_eq!(assessment.level, RiskLevel::None);
             assert_eq!(assessment.score, 0);
             assert!(assessment.reasons.is_empty());
@@ -568,11 +573,7 @@ mod tests {
         for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
             let engine = default_engine(mode.clone());
             let (assessment, decision) = engine.evaluate(&["rm", "-rf", "/"]);
-            assert_eq!(
-                decision,
-                Decision::Deny,
-                "rm -rf / should Deny in {mode:?}"
-            );
+            assert_eq!(decision, Decision::Deny, "rm -rf / should Deny in {mode:?}");
             assert_eq!(assessment.level, RiskLevel::Critical);
             assert_eq!(assessment.score, 100);
             assert!(
@@ -619,7 +620,11 @@ mod tests {
         let (assessment, decision) =
             engine.evaluate(&["curl", "http://example.com/install.sh", "|", "bash"]);
         assert_eq!(decision, Decision::Deny, "strict should deny curl|bash");
-        assert!(assessment.score >= 51, "score should be High: {}", assessment.score);
+        assert!(
+            assessment.score >= 51,
+            "score should be High: {}",
+            assessment.score
+        );
     }
 
     #[test]
@@ -627,7 +632,11 @@ mod tests {
         let engine = default_engine(SafetyMode::Balanced);
         let (_, decision) =
             engine.evaluate(&["curl", "http://example.com/install.sh", "|", "bash"]);
-        assert_eq!(decision, Decision::Confirm, "balanced should confirm curl|bash");
+        assert_eq!(
+            decision,
+            Decision::Confirm,
+            "balanced should confirm curl|bash"
+        );
     }
 
     #[test]
@@ -635,7 +644,12 @@ mod tests {
         let engine = default_engine(SafetyMode::Loose);
         let (assessment, decision) =
             engine.evaluate(&["curl", "http://example.com/install.sh", "|", "bash"]);
-        assert_eq!(decision, Decision::Confirm, "loose should confirm curl|bash; score={}", assessment.score);
+        assert_eq!(
+            decision,
+            Decision::Confirm,
+            "loose should confirm curl|bash; score={}",
+            assessment.score
+        );
     }
 
     #[test]
@@ -663,7 +677,9 @@ mod tests {
             "strict should confirm sudo rm; score={}",
             assessment.score
         );
-        assert!(assessment.categories.contains(&RiskCategory::PrivilegeElevation));
+        assert!(assessment
+            .categories
+            .contains(&RiskCategory::PrivilegeElevation));
     }
 
     #[test]
@@ -737,7 +753,11 @@ mod tests {
         let engine = SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg);
 
         let (_, decision) = engine.evaluate(&["rm", "-rf", "/"]);
-        assert_eq!(decision, Decision::Deny, "deny must win over allow per FR-33");
+        assert_eq!(
+            decision,
+            Decision::Deny,
+            "deny must win over allow per FR-33"
+        );
     }
 
     // ── Custom deny prefixes ──────────────────────────────────────────────────
@@ -860,10 +880,7 @@ mod tests {
         let engine = default_engine(SafetyMode::Balanced);
         let (assessment, _) = engine.evaluate(&["sudo", "ls"]);
         assert!(
-            assessment
-                .reasons
-                .iter()
-                .any(|r| r.contains("sudo")),
+            assessment.reasons.iter().any(|r| r.contains("sudo")),
             "reason should mention the pattern; reasons={:?}",
             assessment.reasons
         );
@@ -892,11 +909,9 @@ mod tests {
     fn sudo_pattern_match_sets_privilege_category() {
         let engine = default_engine(SafetyMode::Balanced);
         let (assessment, _) = engine.evaluate(&["sudo", "echo"]);
-        assert!(
-            assessment
-                .categories
-                .contains(&RiskCategory::PrivilegeElevation)
-        );
+        assert!(assessment
+            .categories
+            .contains(&RiskCategory::PrivilegeElevation));
     }
 
     #[test]
@@ -904,18 +919,15 @@ mod tests {
         // "rm -r /tmp/x" matches rm pattern
         let engine = default_engine(SafetyMode::Balanced);
         let (assessment, _) = engine.evaluate(&["rm", "-r", "/tmp/x"]);
-        assert!(
-            assessment
-                .categories
-                .contains(&RiskCategory::DestructiveFilesystem)
-        );
+        assert!(assessment
+            .categories
+            .contains(&RiskCategory::DestructiveFilesystem));
     }
 
     #[test]
     fn curl_bash_pattern_sets_network_category() {
         let engine = default_engine(SafetyMode::Balanced);
-        let (assessment, _) =
-            engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
+        let (assessment, _) = engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
         assert!(assessment.categories.contains(&RiskCategory::Network));
     }
 
@@ -995,8 +1007,7 @@ mod tests {
     fn loose_mode_high_risk_confirms_not_denies() {
         let engine = default_engine(SafetyMode::Loose);
         // curl|bash is High risk (55) — in loose: High → Confirm
-        let (assessment, decision) =
-            engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
+        let (assessment, decision) = engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
         assert_eq!(assessment.level, RiskLevel::High);
         assert_eq!(decision, Decision::Confirm);
     }
@@ -1006,8 +1017,7 @@ mod tests {
     #[test]
     fn strict_mode_high_risk_denies() {
         let engine = default_engine(SafetyMode::Strict);
-        let (assessment, decision) =
-            engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
+        let (assessment, decision) = engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
         assert_eq!(assessment.level, RiskLevel::High);
         assert_eq!(decision, Decision::Deny);
     }

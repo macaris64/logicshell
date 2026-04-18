@@ -50,10 +50,7 @@ impl LogicShell {
             .unwrap_or_else(|_| String::from("?"));
 
         // Phase 7: safety policy evaluation before any hooks or spawn.
-        let engine = SafetyPolicyEngine::new(
-            self.config.safety_mode.clone(),
-            &self.config.safety,
-        );
+        let engine = SafetyPolicyEngine::new(self.config.safety_mode.clone(), &self.config.safety);
         let (assessment, decision) = engine.evaluate(argv);
 
         if decision == Decision::Deny {
@@ -112,8 +109,7 @@ impl LogicShell {
     /// Returns a `(RiskAssessment, Decision)` pair. The engine is sync and
     /// deterministic: identical input always produces identical output.
     pub fn evaluate_safety(&self, argv: &[&str]) -> (RiskAssessment, Decision) {
-        SafetyPolicyEngine::new(self.config.safety_mode.clone(), &self.config.safety)
-            .evaluate(argv)
+        SafetyPolicyEngine::new(self.config.safety_mode.clone(), &self.config.safety).evaluate(argv)
     }
 }
 
@@ -327,10 +323,7 @@ mod tests {
         let result = ls
             .dispatch(&["curl", "http://x.com/install.sh", "|", "bash"])
             .await;
-        assert!(
-            result.is_err(),
-            "strict mode should block curl|bash"
-        );
+        assert!(result.is_err(), "strict mode should block curl|bash");
     }
 
     /// Phase 7: dispatch in loose mode allows sudo commands.
