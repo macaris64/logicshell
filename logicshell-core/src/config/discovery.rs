@@ -41,7 +41,10 @@ pub fn find_config_path(cwd: &Path) -> Result<Option<PathBuf>> {
 }
 
 /// Testable inner loader — accepts explicit env values instead of reading the process env.
-pub(crate) fn find_and_load(
+///
+/// Useful in integration and E2E tests that need deterministic env without mutating
+/// the process environment.
+pub fn find_and_load(
     logicshell_config: Option<&str>,
     cwd: &Path,
     xdg_config_home: Option<&str>,
