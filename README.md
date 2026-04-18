@@ -21,7 +21,7 @@ LogicShell is a **library-first** Rust framework that sits between a host applic
 - **Append-only audit log** — every dispatch writes a NDJSON record (timestamp, cwd, argv, safety decision, optional note) that survives process restarts.
 - **Configuration discovery** — TOML config file resolved via `LOGICSHELL_CONFIG`, project walk-up, XDG, or built-in defaults, with strict unknown-key rejection.
 - **Safety policy engine** — `strict` / `balanced` / `loose` modes with deny/allow prefix lists, high-risk regex patterns, sudo heuristics, and a four-category risk taxonomy (destructive filesystem, privilege elevation, network, package).
-- **Local LLM bridge** _(Phases 8–10, planned)_ — Ollama-backed natural-language-to-command translation, gated behind safety policy and explicit user confirmation.
+- **Local LLM bridge** _(Phases 8–10)_ — Ollama-backed natural-language-to-command translation, gated behind safety policy and explicit user confirmation. AI-generated commands always require confirmation before dispatch.
 
 LogicShell is **not** a POSIX shell replacement. It is an embeddable dispatcher + policy + optional-AI stack that host applications link as a crate.
 
@@ -33,11 +33,12 @@ LogicShell is **not** a POSIX shell replacement. It is an embeddable dispatcher 
 |:----------|:-------|:-------|
 | **M1** — Dispatcher, config, CI | 1–5 | ✅ Complete |
 | **M2** — Safety engine, audit, hooks | 6–7 | ✅ Complete |
-| **M3** — LLM bridge, Ollama | 8–10 | 📋 Planned |
-| **M4** — Ratatui TUI | — | 📋 Planned |
-| **M5** — Remote LLM providers | — | 📋 Planned |
+| **M3** — LLM bridge, Ollama | 8–10 | ✅ Complete |
+| **M4** — Ratatui TUI | 11–14 | 📋 Planned |
+| **M5** — Remote LLM providers | 15–17 | 📋 Planned |
+| **M6** — Plugin system | 18–20 | 📋 Planned |
 
-**Current:** 294 tests · **98%+ line coverage** · `cargo clippy -D warnings` clean
+**Current:** 506 tests · **96%+ line coverage** · `cargo clippy -D warnings` clean
 
 ---
 
@@ -304,9 +305,9 @@ command = ["slack-notify", "deploying to prod"]
 timeout_ms = 3000
 ```
 
-### 2. AI-assisted terminal (planned — Phase 8+)
+### 2. AI-assisted terminal (Phase 10)
 
-Enable `llm.invocation.assist_on_not_found = true` to have LogicShell query a local Ollama model when a command returns exit code 127. The suggested correction is presented for confirmation before running — never auto-executed.
+Enable `llm.invocation.assist_on_not_found = true` to have LogicShell query a local Ollama model when a command returns exit code 127. The suggested correction is presented for confirmation before running — never auto-executed. AI-generated commands always receive a raised safety floor (`Allow` → `Confirm`).
 
 ```toml
 [llm]
@@ -328,25 +329,28 @@ Run arbitrary scripts before every dispatch — health checks, secret injection,
 
 ## Next steps (roadmap)
 
-### Phase 8 — LLM context + prompt composer
+### ✅ Phase 8 — LLM context + prompt composer
 
 - `SystemContextProvider` — reads OS family, architecture, abbreviated PATH, cwd.
 - `PromptComposer` — pure, sync, templates via `include_str!`, enforces `max_context_chars`.
 - `LlmClient` async trait + `LlmRequest` / `LlmResponse` types.
-- Build without the `ollama` feature; no HTTP deps in `logicshell-core`.
 
-### Phase 9 — OllamaLlmClient
+### ✅ Phase 9 — OllamaLlmClient
 
 - `OllamaLlmClient` behind the `ollama` feature flag using `reqwest`.
 - Health probe (`GET /api/tags`) with graceful degradation matrix.
 - Full mockito test suite; zero real network in default `cargo test`.
 
-### Phase 10 — LlmBridge + AI-safety integration
+### ✅ Phase 10 — LlmBridge + AI-safety integration
 
-- `LlmBridge` orchestrates context → composer → client → parser → safety.
-- `ProposedCommand` with `source: CommandSource::AiGenerated` raises the risk floor.
-- NL session mode, argv-only mode, and assist-on-127 mode.
-- Graceful degradation when Ollama is unreachable.
+- `LlmBridge<C>` generic orchestrator: context → composer → client → parser → `ProposedCommand`.
+- `ProposedCommand` with `source: CommandSource::AiGenerated` raises the risk floor (`Allow` → `Confirm`).
+- `parser::parse_command_response` — strips code fences, POSIX shell tokenizer.
+- NL session mode (`translate_nl`) and assist-on-127 mode.
+- Graceful degradation: `LlmError::Http` propagated for caller fallback.
+- 96%+ coverage; 506 tests total.
+
+See [LLM_GUIDE.md](LLM_GUIDE.md) for running Ollama alongside LogicShell.
 
 ---
 
@@ -389,15 +393,30 @@ logicshell/
 │   │   ├── hooks_audit_integration.rs
 │   │   └── e2e.rs            # Full-stack end-to-end tests
 │   └── examples/
-│       └── demo.rs           # Runnable feature demonstration
+│       └── demo.rs           # Runnable feature demonstration (Phases 3–7)
 ├── logicshell-llm/           # LLM bridge (Phases 8–10)
-├── docs/
-│   ├── PLAN.md
-│   ├── ARCHITECTURE.md
-│   ├── TESTING_STRATEGY.md
-│   ├── LOGICSHELL_OPERATIONS.md
-│   ├── LogicShell Framework PRD.md
-│   └── LogicShell LLM Module PRD.md
+│   ├── src/
+│   │   ├── lib.rs            # Re-exports for all public types
+│   │   ├── client.rs         # LlmClient trait + LlmRequest/LlmResponse (Phase 8)
+│   │   ├── context.rs        # SystemContextProvider + snapshot (Phase 8)
+│   │   ├── prompt.rs         # PromptComposer + templates (Phase 8)
+│   │   ├── error.rs          # LlmError enum
+│   │   ├── ollama.rs         # OllamaLlmClient (Phase 9, `ollama` feature)
+│   │   ├── parser.rs         # LLM response → argv tokenizer (Phase 10)
+│   │   ├── proposed.rs       # ProposedCommand + CommandSource + safety floor (Phase 10)
+│   │   ├── bridge.rs         # LlmBridge orchestrator (Phase 10)
+│   │   └── templates/
+│   │       ├── nl_to_command.txt
+│   │       └── assist_on_127.txt
+│   ├── tests/
+│   │   ├── phase8_integration.rs
+│   │   ├── phase9_integration.rs  # (requires `ollama` feature)
+│   │   └── phase10_integration.rs
+│   └── examples/
+│       ├── phase8.rs         # Phase 8 demo
+│       ├── phase9.rs         # Phase 9 demo (requires `ollama` feature)
+│       └── phase10.rs        # Phase 10 demo
+├── LLM_GUIDE.md              # Running Ollama + LogicShell together
 ├── tarpaulin.toml            # Coverage config (gate: ≥ 90%)
 ├── rust-toolchain.toml       # Pinned stable channel
 └── Cargo.toml                # Workspace root

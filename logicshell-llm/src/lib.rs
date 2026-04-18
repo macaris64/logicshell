@@ -1,15 +1,20 @@
 // logicshell-llm: LLM bridge, context, composer, Ollama client
 // Enable HTTP backend with the `ollama` feature flag.
 
+pub mod bridge;
 pub mod client;
 pub mod context;
 pub mod error;
+pub mod parser;
 pub mod prompt;
+pub mod proposed;
 
 #[cfg(feature = "ollama")]
 pub mod ollama;
 
+pub use bridge::LlmBridge;
 pub use client::{LlmClient, LlmRequest, LlmResponse};
 pub use context::{SystemContextProvider, SystemContextSnapshot};
 pub use error::LlmError;
 pub use prompt::PromptComposer;
+pub use proposed::{apply_ai_safety_floor, CommandSource, ProposedCommand};
