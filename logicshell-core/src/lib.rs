@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod error;
+pub use config::discovery::{discover, find_config_path};
 pub use error::{LogicShellError, Result};
 
 /// Top-level façade that coordinates configuration, safety, dispatch, and audit.

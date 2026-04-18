@@ -1,5 +1,6 @@
 // Configuration loading for `.logicshell.toml` — Framework PRD §12
 
+pub mod discovery;
 pub mod schema;
 pub use schema::*;
 
