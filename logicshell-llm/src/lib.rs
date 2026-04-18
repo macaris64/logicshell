@@ -6,6 +6,9 @@ pub mod context;
 pub mod error;
 pub mod prompt;
 
+#[cfg(feature = "ollama")]
+pub mod ollama;
+
 pub use client::{LlmClient, LlmRequest, LlmResponse};
 pub use context::{SystemContextProvider, SystemContextSnapshot};
 pub use error::LlmError;
