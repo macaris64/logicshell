@@ -344,4 +344,34 @@ mod tests {
         assert!(result.is_err());
         drop(f);
     }
+
+    // ── public API surface (covers env-reading lines) ─────────────────────────
+
+    #[test]
+    fn discover_loads_dotfile_via_walk_up() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), ".logicshell.toml", CUSTOM_TOML);
+        // Walk-up finds the file before any env-based path; result depends on whether
+        // LOGICSHELL_CONFIG is set in the process env, so we only assert the strong
+        // case when it is not set.
+        if std::env::var("LOGICSHELL_CONFIG").is_err() {
+            let cfg = discover(tmp.path()).unwrap();
+            assert_eq!(cfg.schema_version, 2);
+        } else {
+            // LOGICSHELL_CONFIG is set — just verify the function runs without panic.
+            let _ = discover(tmp.path());
+        }
+    }
+
+    #[test]
+    fn find_config_path_returns_dotfile_via_walk_up() {
+        let tmp = TempDir::new().unwrap();
+        let f = write(tmp.path(), ".logicshell.toml", MINIMAL_TOML);
+        if std::env::var("LOGICSHELL_CONFIG").is_err() {
+            let path = find_config_path(tmp.path()).unwrap();
+            assert_eq!(path, Some(f));
+        } else {
+            let _ = find_config_path(tmp.path());
+        }
+    }
 }
