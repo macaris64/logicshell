@@ -237,4 +237,20 @@ mod tests {
         assert!(o.cwd.is_none());
         assert!(matches!(o.stdin, StdinMode::Null));
     }
+
+    /// FR-03: a process killed by signal has no exit code; we map it to -1.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn signal_killed_process_returns_minus_one() {
+        let d = default_dispatcher();
+        // "kill -9 $$" sends SIGKILL to the shell itself → no exit code → -1.
+        let out = d
+            .dispatch(DispatchOptions {
+                argv: vec!["sh".into(), "-c".into(), "kill -9 $$".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, -1);
+    }
 }

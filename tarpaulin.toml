@@ -1,8 +1,10 @@
 [default]
 workspace = true
 all-features = true
-# Exclude thin binary shims and generated code from the coverage gate
-exclude-files = ["*/main.rs"]
+# Exclude thin binary shims, fixture binaries, and generated code from the coverage gate.
+# Fixture binaries (fixture_*.rs) are spawned as child processes during integration tests;
+# they are not instrumented by tarpaulin and would count as 0% coverage.
+exclude-files = ["*/main.rs", "*/bin/fixture_*.rs"]
 # Fail CI if coverage drops below this threshold (Framework PRD §11.4)
 fail-under = 90
 out = ["Html", "Xml"]
