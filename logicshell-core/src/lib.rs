@@ -1,13 +1,18 @@
 // logicshell-core: dispatcher, config, safety, audit, hooks — no HTTP
 
+pub mod audit;
 pub mod config;
 pub mod dispatcher;
 pub mod error;
+pub mod hooks;
+
+pub use audit::{AuditDecision, AuditRecord, AuditSink};
 pub use config::discovery::{discover, find_config_path};
 pub use error::{LogicShellError, Result};
 
 use config::Config;
 use dispatcher::{DispatchOptions, Dispatcher};
+use hooks::HookRunner;
 
 /// Top-level façade that coordinates configuration, safety, dispatch, and audit.
 ///
@@ -32,16 +37,40 @@ impl LogicShell {
 
     /// Spawn a child process by argv and return its exit code — FR-01–04.
     ///
-    /// Uses `limits.max_stdout_capture_bytes` from the active config (NFR-08).
+    /// Pipeline (Phase 6): pre-exec hooks → dispatch → audit record written.
     /// A nonzero exit code is returned as `Ok(n)`, not an error.
     pub async fn dispatch(&self, argv: &[&str]) -> Result<i32> {
+        // Phase 6: run pre-exec hooks before dispatch.
+        HookRunner::new(&self.config.hooks).run_pre_exec().await?;
+
         let d = Dispatcher::new(&self.config.limits);
         let opts = DispatchOptions {
             argv: argv.iter().map(|s| s.to_string()).collect(),
             ..DispatchOptions::default()
         };
         let output = d.dispatch(opts).await?;
+
+        // Phase 6: append an audit record after every successful dispatch.
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| String::from("?"));
+        let record = AuditRecord::new(
+            cwd,
+            argv.iter().map(|s| s.to_string()).collect(),
+            AuditDecision::Allow, // Safety policy wired in Phase 7.
+        );
+        AuditSink::from_config(&self.config.audit)?.write(&record)?;
+
         Ok(output.exit_code)
+    }
+
+    /// Append an [`AuditRecord`] to the configured audit log — §10.2, NFR-07.
+    ///
+    /// Opens (or creates) the audit file on each call; use directly when the
+    /// caller needs to record a decision that happened outside of `dispatch`
+    /// (e.g. a denied command or a user confirmation).
+    pub fn audit(&self, record: &AuditRecord) -> Result<()> {
+        AuditSink::from_config(&self.config.audit)?.write(record)
     }
 
     /// Stub: evaluate a command through the safety policy engine.
@@ -50,15 +79,6 @@ impl LogicShell {
     pub fn evaluate_safety(&self, _argv: &[&str]) -> Result<()> {
         Err(LogicShellError::Safety(
             "not yet implemented (phase 7)".into(),
-        ))
-    }
-
-    /// Stub: append a record to the audit log.
-    ///
-    /// Full implementation: Phase 6 (Audit log — §10.2, NFR-07).
-    pub fn audit(&self, _record: &str) -> Result<()> {
-        Err(LogicShellError::Audit(
-            "not yet implemented (phase 6)".into(),
         ))
     }
 }
@@ -72,6 +92,15 @@ impl Default for LogicShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn ls_with_temp_audit() -> (LogicShell, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.log").to_str().unwrap().to_string();
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(path);
+        (LogicShell::with_config(cfg), tmp)
+    }
 
     /// Phase 1 smoke: workspace builds and core crate is reachable — NFR-09, NFR-10
     #[test]
@@ -99,8 +128,7 @@ mod tests {
     /// Phase 5: dispatch runs a real command and returns its exit code — FR-01
     #[tokio::test]
     async fn dispatch_runs_real_command() {
-        let ls = LogicShell::new();
-        // `true` always exits 0 on Unix
+        let (ls, _tmp) = ls_with_temp_audit();
         let result = ls.dispatch(&["true"]).await;
         assert!(result.is_ok(), "dispatch returned Err: {result:?}");
         assert_eq!(result.unwrap(), 0);
@@ -109,11 +137,105 @@ mod tests {
     /// Phase 5: dispatch propagates nonzero exit — FR-03
     #[tokio::test]
     async fn dispatch_propagates_nonzero_exit() {
-        let ls = LogicShell::new();
-        // `false` always exits 1 on Unix
+        let (ls, _tmp) = ls_with_temp_audit();
         let result = ls.dispatch(&["false"]).await;
         assert!(result.is_ok(), "expected Ok(1), got Err: {result:?}");
         assert_eq!(result.unwrap(), 1);
+    }
+
+    /// Phase 6: dispatch writes an audit record for every invocation.
+    #[tokio::test]
+    async fn dispatch_writes_audit_record() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+        let ls = LogicShell::with_config(cfg);
+
+        ls.dispatch(&["true"]).await.unwrap();
+
+        let content = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(
+            !content.is_empty(),
+            "audit log should be non-empty after dispatch"
+        );
+        let v: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(v["decision"], "allow");
+        assert_eq!(v["argv"][0], "true");
+    }
+
+    /// Phase 6: dispatch with pre-exec hooks runs the hooks first.
+    #[tokio::test]
+    async fn dispatch_runs_pre_exec_hooks() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let hook_marker = tmp.path().join("hook_ran");
+
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+        cfg.hooks.pre_exec = vec![crate::config::HookEntry {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("touch {}", hook_marker.display()),
+            ],
+            timeout_ms: 5_000,
+        }];
+
+        let ls = LogicShell::with_config(cfg);
+        ls.dispatch(&["true"]).await.unwrap();
+
+        assert!(
+            hook_marker.exists(),
+            "pre-exec hook should have created the marker file"
+        );
+    }
+
+    /// Phase 6: a failing pre-exec hook prevents dispatch.
+    #[tokio::test]
+    async fn failing_hook_aborts_dispatch() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+        cfg.hooks.pre_exec = vec![crate::config::HookEntry {
+            command: vec!["false".to_string()],
+            timeout_ms: 5_000,
+        }];
+
+        let ls = LogicShell::with_config(cfg);
+        let result = ls.dispatch(&["true"]).await;
+        assert!(matches!(result, Err(LogicShellError::Hook(_))));
+    }
+
+    /// Phase 6: audit() writes a record to the configured path.
+    #[test]
+    fn audit_writes_record_to_configured_path() {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+
+        let ls = LogicShell::with_config(cfg);
+        let record = AuditRecord::new("/tmp", vec!["ls".to_string()], AuditDecision::Allow);
+        ls.audit(&record).unwrap();
+
+        let content = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(!content.is_empty());
+        let v: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(v["decision"], "allow");
+    }
+
+    /// Phase 6: audit() with disabled config is a no-op.
+    #[test]
+    fn audit_disabled_config_is_noop() {
+        let mut cfg = Config::default();
+        cfg.audit.enabled = false;
+
+        let ls = LogicShell::with_config(cfg);
+        let record = AuditRecord::new("/tmp", vec!["ls".to_string()], AuditDecision::Deny);
+        assert!(ls.audit(&record).is_ok());
     }
 
     /// Stub safety returns a `Safety` error, not a panic — NFR-06
@@ -122,13 +244,5 @@ mod tests {
         let ls = LogicShell::new();
         let result = ls.evaluate_safety(&["ls"]);
         assert!(matches!(result, Err(LogicShellError::Safety(_))));
-    }
-
-    /// Stub audit returns an `Audit` error, not a panic — NFR-06
-    #[test]
-    fn audit_stub_returns_error() {
-        let ls = LogicShell::new();
-        let result = ls.audit("test record");
-        assert!(matches!(result, Err(LogicShellError::Audit(_))));
     }
 }
