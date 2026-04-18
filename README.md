@@ -1,5 +1,9 @@
 # LogicShell
 
+<p align="center">
+  <img src="public/logicshell.png" alt="LogicShell Logo" width="400">
+</p>
+
 > A TDD-engineered, AI-augmented OS execution framework — embeddable Rust library for safe, auditable, policy-driven command dispatch with optional local LLM assistance.
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange)](https://www.rust-lang.org/)
