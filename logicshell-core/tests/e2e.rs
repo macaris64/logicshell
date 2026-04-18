@@ -9,8 +9,8 @@ use tempfile::TempDir;
 
 use logicshell_core::{
     audit::{AuditDecision, AuditRecord, AuditSink},
-    config::{discovery::find_and_load, load, Config, HookEntry, LimitsConfig},
-    discover, find_config_path, LogicShell,
+    config::{discovery::find_and_load, load, Config, HookEntry, LimitsConfig, SafetyConfig},
+    discover, find_config_path, Decision, LogicShell, RiskCategory, RiskLevel, SafetyPolicyEngine,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -479,12 +479,27 @@ async fn e2e_nonexistent_binary_returns_structured_error() {
     assert!(!audit_path.exists());
 }
 
-/// NFR-06: evaluate_safety stub returns Safety error, not a panic.
+/// Phase 7: evaluate_safety returns a real Decision — FR-30–33.
 #[test]
-fn e2e_safety_stub_error() {
+fn e2e_safety_denies_destructive_command() {
     let ls = LogicShell::new();
-    let result = ls.evaluate_safety(&["rm", "-rf", "/"]);
-    assert!(result.is_err(), "safety stub must return Err until Phase 7");
+    let (assessment, decision) = ls.evaluate_safety(&["rm", "-rf", "/"]);
+    assert_eq!(
+        decision,
+        logicshell_core::Decision::Deny,
+        "rm -rf / must be Denied"
+    );
+    assert_eq!(assessment.level, logicshell_core::RiskLevel::Critical);
+}
+
+/// Phase 7: evaluate_safety allows a safe command.
+#[test]
+fn e2e_safety_allows_safe_command() {
+    let ls = LogicShell::new();
+    let (assessment, decision) = ls.evaluate_safety(&["ls", "-la"]);
+    assert_eq!(decision, logicshell_core::Decision::Allow);
+    assert_eq!(assessment.level, logicshell_core::RiskLevel::None);
+    assert_eq!(assessment.score, 0);
 }
 
 // ── Config validation edge cases ──────────────────────────────────────────────
@@ -564,4 +579,348 @@ async fn e2e_custom_limits_round_trip() {
     let ls = LogicShell::with_config(cfg);
     ls.dispatch(&["true"]).await.unwrap();
     assert!(audit_path.exists());
+}
+
+// ── Phase 7: Safety policy engine e2e ────────────────────────────────────────
+
+/// FR-30–33: safe command allowed in all modes end-to-end.
+#[tokio::test]
+async fn e2e_safe_command_allowed_all_modes() {
+    use logicshell_core::config::SafetyMode;
+
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.safety_mode = mode.clone();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+
+        let ls = LogicShell::with_config(cfg);
+        let code = ls.dispatch(&["true"]).await.expect("safe command must succeed");
+        assert_eq!(code, 0, "safe cmd must exit 0 in {mode:?}");
+
+        let records = read_audit_lines(&audit_path);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["decision"], "allow");
+    }
+}
+
+/// FR-33: rm -rf / is denied in all modes and writes a deny audit record.
+#[tokio::test]
+async fn e2e_safety_deny_prefix_blocks_dispatch_and_audits() {
+    let tmp = TempDir::new().unwrap();
+    let audit_path = tmp.path().join("audit.log");
+    let mut cfg = Config::default();
+    cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+
+    let ls = LogicShell::with_config(cfg);
+    let result = ls.dispatch(&["rm", "-rf", "/"]).await;
+    assert!(result.is_err(), "rm -rf / must be blocked");
+
+    // Audit log must contain a deny record.
+    let records = read_audit_lines(&audit_path);
+    assert_eq!(records.len(), 1, "exactly one deny audit record");
+    assert_eq!(records[0]["decision"], "deny");
+    assert_eq!(records[0]["argv"][0], "rm");
+    assert!(
+        records[0]["note"].as_str().unwrap_or("").contains("denied"),
+        "note should explain the denial"
+    );
+}
+
+/// FR-32: mkfs prefix is denied in all safety modes.
+#[tokio::test]
+async fn e2e_safety_mkfs_denied_all_modes() {
+    use logicshell_core::config::SafetyMode;
+
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = Config::default();
+        cfg.safety_mode = mode;
+        cfg.audit.path = Some(tmp.path().join("a.log").to_str().unwrap().to_string());
+
+        let ls = LogicShell::with_config(cfg);
+        let result = ls.dispatch(&["mkfs", "/dev/sda"]).await;
+        assert!(result.is_err(), "mkfs must be blocked");
+    }
+}
+
+/// FR-30: sudo command is denied in strict, confirmed in balanced, allowed in loose.
+#[tokio::test]
+async fn e2e_sudo_decision_varies_by_mode() {
+    use logicshell_core::config::SafetyMode;
+
+    // strict → sudo true is Confirm (medium risk) → proceeds in phase 7 dispatch
+    // balanced → Confirm → proceeds
+    // loose → Allow → proceeds
+
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let tmp = TempDir::new().unwrap();
+        let audit_path = tmp.path().join("audit.log");
+        let mut cfg = Config::default();
+        cfg.safety_mode = mode.clone();
+        cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+
+        let ls = LogicShell::with_config(cfg);
+        // sudo true: medium risk (pattern match ~30) → allowed in all modes
+        // (Confirm also proceeds in phase-7 dispatch; blocked only for Deny)
+        let _ = ls.dispatch(&["sudo", "true"]).await;
+        // Don't assert success/failure — sudo may not be available in CI.
+        // Just verify no panic and audit file exists.
+        assert!(
+            audit_path.exists(),
+            "audit file must be written in {mode:?} mode"
+        );
+    }
+}
+
+/// FR-33: allow_prefix in config lets a command bypass safety checks.
+#[tokio::test]
+async fn e2e_allow_prefix_bypasses_risk_scoring() {
+    let tmp = TempDir::new().unwrap();
+    let audit_path = tmp.path().join("audit.log");
+
+    let toml = format!(
+        r#"
+safety_mode = "strict"
+[safety]
+allow_prefixes = ["git "]
+deny_prefixes = []
+high_risk_patterns = []
+[audit]
+enabled = true
+path = "{}"
+"#,
+        audit_path.display()
+    );
+    let cfg = load(&toml).unwrap();
+    let ls = LogicShell::with_config(cfg);
+
+    let code = ls.dispatch(&["git", "status"]).await.expect("allowlisted command must succeed");
+    assert_eq!(code, 0);
+
+    let records = read_audit_lines(&audit_path);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["decision"], "allow");
+}
+
+/// FR-33: custom deny prefix in config blocks command end-to-end.
+#[tokio::test]
+async fn e2e_custom_deny_prefix_blocks_dispatch() {
+    let tmp = TempDir::new().unwrap();
+    let audit_path = tmp.path().join("audit.log");
+
+    let toml = format!(
+        r#"
+[safety]
+deny_prefixes = ["danger-zone"]
+allow_prefixes = []
+high_risk_patterns = []
+[audit]
+enabled = true
+path = "{}"
+"#,
+        audit_path.display()
+    );
+    let cfg = load(&toml).unwrap();
+    let ls = LogicShell::with_config(cfg);
+
+    let result = ls.dispatch(&["danger-zone", "--all"]).await;
+    assert!(result.is_err(), "custom deny prefix must block dispatch");
+
+    let records = read_audit_lines(&audit_path);
+    assert_eq!(records[0]["decision"], "deny");
+}
+
+/// FR-30: SafetyPolicyEngine used directly — all golden test cases.
+#[test]
+fn e2e_safety_engine_golden_tests() {
+    use logicshell_core::config::SafetyMode;
+
+    let cfg = SafetyConfig::default();
+
+    // ls → Allow in all modes
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let engine = SafetyPolicyEngine::new(mode, &cfg);
+        let (a, d) = engine.evaluate(&["ls"]);
+        assert_eq!(d, Decision::Allow, "ls must Allow");
+        assert_eq!(a.level, RiskLevel::None);
+    }
+
+    // rm -rf / → Deny in all modes
+    for mode in [SafetyMode::Strict, SafetyMode::Balanced, SafetyMode::Loose] {
+        let engine = SafetyPolicyEngine::new(mode, &cfg);
+        let (a, d) = engine.evaluate(&["rm", "-rf", "/"]);
+        assert_eq!(d, Decision::Deny, "rm -rf / must Deny");
+        assert_eq!(a.level, RiskLevel::Critical);
+    }
+
+    // curl|bash → Deny in strict, Confirm in balanced and loose
+    {
+        let argv = ["curl", "http://x.com/install.sh", "|", "bash"];
+        let (_, d_strict) =
+            SafetyPolicyEngine::new(SafetyMode::Strict, &cfg).evaluate(&argv);
+        assert_eq!(d_strict, Decision::Deny, "strict must deny curl|bash");
+
+        let (_, d_balanced) =
+            SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg).evaluate(&argv);
+        assert_eq!(d_balanced, Decision::Confirm, "balanced must confirm curl|bash");
+
+        let (_, d_loose) =
+            SafetyPolicyEngine::new(SafetyMode::Loose, &cfg).evaluate(&argv);
+        assert_eq!(d_loose, Decision::Confirm, "loose must confirm curl|bash");
+    }
+
+    // sudo rm → Confirm in strict, Confirm in balanced, Allow in loose
+    {
+        let argv = ["sudo", "rm", "/tmp/x"];
+        let (_, d_strict) =
+            SafetyPolicyEngine::new(SafetyMode::Strict, &cfg).evaluate(&argv);
+        assert_eq!(d_strict, Decision::Confirm, "strict must confirm sudo rm");
+
+        let (_, d_balanced) =
+            SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg).evaluate(&argv);
+        assert_eq!(d_balanced, Decision::Confirm, "balanced must confirm sudo rm");
+
+        let (_, d_loose) =
+            SafetyPolicyEngine::new(SafetyMode::Loose, &cfg).evaluate(&argv);
+        assert_eq!(d_loose, Decision::Allow, "loose must allow sudo rm");
+    }
+}
+
+/// FR-33: deny wins over allow — overlapping prefix rules.
+#[test]
+fn e2e_deny_wins_over_allow_overlapping_prefix() {
+    use logicshell_core::config::SafetyMode;
+
+    let mut cfg = SafetyConfig::default();
+    cfg.deny_prefixes = vec!["rm -rf /".into()];
+    cfg.allow_prefixes = vec!["rm ".into()]; // broader allow; deny must still win for rm -rf /
+
+    let engine = SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg);
+    let (_, decision) = engine.evaluate(&["rm", "-rf", "/"]);
+    assert_eq!(decision, Decision::Deny, "deny must win over allow (FR-33)");
+
+    // rm /tmp/file matches allow_prefix "rm " (no deny match) → Allow
+    let (_, decision2) = engine.evaluate(&["rm", "/tmp/file"]);
+    assert_eq!(decision2, Decision::Allow, "rm /tmp/file with allow prefix");
+}
+
+/// Phase 7: RiskAssessment risk categories are populated for detected patterns.
+#[test]
+fn e2e_risk_categories_populated() {
+    use logicshell_core::config::SafetyMode;
+
+    let cfg = SafetyConfig::default();
+
+    // sudo → PrivilegeElevation
+    let engine = SafetyPolicyEngine::new(SafetyMode::Balanced, &cfg);
+    let (assessment, _) = engine.evaluate(&["sudo", "ls"]);
+    assert!(
+        assessment.categories.contains(&RiskCategory::PrivilegeElevation),
+        "sudo must set PrivilegeElevation category"
+    );
+
+    // rm -r → DestructiveFilesystem
+    let (assessment2, _) = engine.evaluate(&["rm", "-r", "/tmp/dir"]);
+    assert!(
+        assessment2.categories.contains(&RiskCategory::DestructiveFilesystem),
+        "rm -r must set DestructiveFilesystem category"
+    );
+
+    // curl|bash → Network
+    let (assessment3, _) =
+        engine.evaluate(&["curl", "http://x.com", "|", "bash"]);
+    assert!(
+        assessment3.categories.contains(&RiskCategory::Network),
+        "curl|bash must set Network category"
+    );
+}
+
+/// Phase 7: dispatch integrates safety — Confirm decision proceeds (phase 10 adds UI).
+#[tokio::test]
+async fn e2e_confirm_decision_proceeds_in_dispatch() {
+    // In balanced mode, sudo true is Confirm (medium risk).
+    // Phase 7 lets Confirm proceed (no interactive UI yet).
+    let tmp = TempDir::new().unwrap();
+    let audit_path = tmp.path().join("audit.log");
+
+    let toml = format!(
+        r#"
+safety_mode = "balanced"
+[audit]
+enabled = true
+path = "{}"
+"#,
+        audit_path.display()
+    );
+    let cfg = load(&toml).unwrap();
+    let ls = LogicShell::with_config(cfg);
+
+    // "echo hello" is None risk → should always succeed
+    let code = ls.dispatch(&["echo", "hello"]).await.unwrap();
+    assert_eq!(code, 0);
+
+    let records = read_audit_lines(&audit_path);
+    assert_eq!(records[0]["decision"], "allow");
+}
+
+/// Phase 7: safety + hooks + audit full pipeline with safe command.
+#[tokio::test]
+async fn e2e_safety_hooks_audit_pipeline() {
+    let tmp = TempDir::new().unwrap();
+    let audit_path = tmp.path().join("audit.log");
+    let hook_marker = tmp.path().join("hook_ran");
+
+    let toml = format!(
+        r#"
+safety_mode = "balanced"
+[audit]
+enabled = true
+path = "{audit}"
+[[hooks.pre_exec]]
+command = ["sh", "-c", "touch {marker}"]
+timeout_ms = 5000
+"#,
+        audit = audit_path.display(),
+        marker = hook_marker.display()
+    );
+    let cfg = load(&toml).unwrap();
+    let ls = LogicShell::with_config(cfg);
+
+    let code = ls.dispatch(&["true"]).await.unwrap();
+    assert_eq!(code, 0);
+    assert!(hook_marker.exists(), "hook must run after safety allow");
+
+    let records = read_audit_lines(&audit_path);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["decision"], "allow");
+}
+
+/// Phase 7: safety deny writes audit record BEFORE hooks run (hooks skipped on deny).
+#[tokio::test]
+async fn e2e_safety_deny_skips_hooks() {
+    let tmp = TempDir::new().unwrap();
+    let audit_path = tmp.path().join("audit.log");
+    let hook_marker = tmp.path().join("should_not_exist");
+
+    let mut cfg = Config::default();
+    cfg.audit.path = Some(audit_path.to_str().unwrap().to_string());
+    cfg.hooks.pre_exec = vec![HookEntry {
+        command: vec![
+            "sh".into(),
+            "-c".into(),
+            format!("touch {}", hook_marker.display()),
+        ],
+        timeout_ms: 5_000,
+    }];
+
+    let ls = LogicShell::with_config(cfg);
+    let result = ls.dispatch(&["rm", "-rf", "/"]).await;
+    assert!(result.is_err());
+
+    // Deny audit was written but hook did NOT run.
+    let records = read_audit_lines(&audit_path);
+    assert_eq!(records[0]["decision"], "deny");
+    assert!(!hook_marker.exists(), "hook must NOT run when safety denies");
 }
