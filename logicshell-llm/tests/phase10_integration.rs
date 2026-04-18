@@ -295,14 +295,6 @@ mod ollama_bridge_tests {
         format!(r#"{{"model":"{model}","response":"{response}","done":true}}"#)
     }
 
-    fn tags_ok_body(names: &[&str]) -> String {
-        let entries: Vec<String> = names
-            .iter()
-            .map(|n| format!(r#"{{"name":"{n}"}}"#))
-            .collect();
-        format!(r#"{{"models":[{}]}}"#, entries.join(","))
-    }
-
     #[tokio::test]
     async fn bridge_translate_nl_via_ollama_mock() {
         let mut server = mockito::Server::new_async().await;
