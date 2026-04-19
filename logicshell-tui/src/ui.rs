@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const PHASE: &str = "11";
+const PHASE: &str = "12";
 
 /// Render the full TUI layout into the given [`Frame`].
 ///
@@ -77,7 +77,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
-    let prompt_text = format!("  {} > {}_", app.cwd, app.input);
+    let prompt_text = format!("  {} > {}", app.cwd, app.input_widget.render_with_cursor());
     let prompt = Paragraph::new(prompt_text).style(
         Style::default()
             .fg(Color::Yellow)
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn prompt_shows_cwd_and_input() {
         let mut app = App::new("/home/aero", "balanced");
-        app.input = "ls -la".to_string();
+        app.input_widget.set_value("ls -la");
         let buf = render_to_buffer(&app, 80, 10);
         // Prompt is row index 8 (height=10: title=0, msgs=1..7, prompt=8, status=9)
         let row = buf_row(&buf, 8, 80);
@@ -183,7 +183,7 @@ mod tests {
         let app = App::new("/", "balanced");
         let buf = render_to_buffer(&app, 80, 10);
         let row = buf_row(&buf, 0, 80);
-        assert!(row.contains("11"), "title should contain phase 11: {row:?}");
+        assert!(row.contains("12"), "title should contain phase 12: {row:?}");
     }
 
     #[test]

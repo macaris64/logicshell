@@ -1,4 +1,5 @@
 // Phase 11 integration tests — App + UI pipeline without a real terminal
+// (updated for Phase 12: App.input → App.input_widget)
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use logicshell_tui::{ui, App, AppState};
@@ -71,19 +72,18 @@ fn typing_sequence_builds_correct_input() {
     for c in "git status".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
-    assert_eq!(app.input, "git status");
+    assert_eq!(app.input_widget.value(), "git status");
 }
 
 #[test]
 fn backspace_corrects_input() {
     let mut app = App::new("/", "balanced");
-    // Type "gii" then backspace to get "gi", then type "t" to get "git"
     for c in "gii".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
     app.handle_key(key(KeyCode::Backspace));
     app.handle_key(key(KeyCode::Char('t')));
-    assert_eq!(app.input, "git");
+    assert_eq!(app.input_widget.value(), "git");
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn enter_clears_input_after_submit() {
         app.handle_key(key(KeyCode::Char(c)));
     }
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.input, "");
+    assert_eq!(app.input_widget.value(), "");
 }
 
 #[test]
@@ -126,11 +126,10 @@ fn multiple_commands_accumulate_in_order() {
 #[test]
 fn q_mid_word_does_not_quit() {
     let mut app = App::new("/", "balanced");
-    // type "git" — 'q' is not present but test with 'q' inside input
     app.handle_key(key(KeyCode::Char('s')));
     app.handle_key(key(KeyCode::Char('q')));
     assert_eq!(app.state, AppState::Running);
-    assert_eq!(app.input, "sq");
+    assert_eq!(app.input_widget.value(), "sq");
 }
 
 // ── layout rendering to buffer ────────────────────────────────────────────────
@@ -142,8 +141,8 @@ fn rendered_title_contains_logicshell_and_phase() {
     let title = row(&buf, 0, 80);
     assert!(title.contains("LogicShell"), "title: {title:?}");
     assert!(
-        title.contains("11"),
-        "title should mention phase 11: {title:?}"
+        title.contains("12"),
+        "title should mention phase 12: {title:?}"
     );
 }
 
@@ -176,7 +175,7 @@ fn prompt_renders_cwd() {
 #[test]
 fn prompt_renders_current_input() {
     let mut app = App::new("/", "balanced");
-    app.input = "cat foo.txt".to_string();
+    app.input_widget.set_value("cat foo.txt");
     let buf = render(&app, 80, 10);
     let prompt = row(&buf, 8, 80);
     assert!(prompt.contains("cat foo.txt"), "prompt: {prompt:?}");
@@ -189,7 +188,6 @@ fn messages_area_shows_submitted_commands() {
     let buf = render(&app, 80, 10);
     let body = rows(&buf, 1, 9, 80);
     assert!(body.contains("ls -la"), "body: {body:?}");
-    // Welcome should no longer appear when there are messages
     assert!(
         !body.contains("Welcome"),
         "Welcome should be gone: {body:?}"
@@ -199,7 +197,6 @@ fn messages_area_shows_submitted_commands() {
 #[test]
 fn render_survives_narrow_terminal() {
     let app = App::new("/long/path/here", "balanced");
-    // Should not panic on narrow terminal
     let backend = TestBackend::new(15, 5);
     let mut term = Terminal::new(backend).unwrap();
     term.draw(|f| ui::draw(f, &app)).unwrap();
@@ -219,22 +216,19 @@ fn render_survives_wide_terminal() {
 fn full_interaction_round_trip() {
     let mut app = App::new("/home/aero", "balanced");
 
-    // Simulate typing "ls -la" and submitting
     for c in "ls -la".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
-    assert_eq!(app.input, "ls -la");
+    assert_eq!(app.input_widget.value(), "ls -la");
 
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.input, "");
+    assert_eq!(app.input_widget.value(), "");
     assert_eq!(app.messages.len(), 1);
 
-    // Render after submit — messages should appear in body
     let buf = render(&app, 80, 10);
     let body = rows(&buf, 1, 9, 80);
     assert!(body.contains("ls -la"), "body after submit: {body:?}");
 
-    // Now quit
     app.handle_key(ctrl('c'));
     assert_eq!(app.state, AppState::Quitting);
 }
