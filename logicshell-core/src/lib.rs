@@ -104,6 +104,68 @@ impl LogicShell {
         AuditSink::from_config(&self.config.audit)?.write(record)
     }
 
+    /// Stream stdout of a child process line-by-line into `line_tx` — Phase 13.
+    ///
+    /// Safety, hooks, and audit follow the same pipeline as [`dispatch`].
+    /// Each stdout line is sent to `line_tx` as it arrives; stderr is discarded
+    /// (callers that need stderr should use `dispatch` instead).
+    /// Returns `(exit_code, elapsed_duration)`.
+    ///
+    /// [`dispatch`]: LogicShell::dispatch
+    pub async fn dispatch_streaming(
+        &self,
+        argv: &[&str],
+        line_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Result<(i32, std::time::Duration)> {
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| String::from("?"));
+
+        let engine = SafetyPolicyEngine::new(self.config.safety_mode.clone(), &self.config.safety);
+        let (assessment, decision) = engine.evaluate(argv);
+
+        if decision == Decision::Deny {
+            let note = assessment.reasons.join("; ");
+            let record = AuditRecord::new(
+                cwd,
+                argv.iter().map(|s| s.to_string()).collect(),
+                AuditDecision::Deny,
+            )
+            .with_note(note.clone());
+            AuditSink::from_config(&self.config.audit)?.write(&record)?;
+            return Err(LogicShellError::Safety(format!(
+                "command denied by safety policy: {note}"
+            )));
+        }
+
+        let audit_decision = if decision == Decision::Confirm {
+            AuditDecision::Confirm
+        } else {
+            AuditDecision::Allow
+        };
+
+        HookRunner::new(&self.config.hooks).run_pre_exec().await?;
+
+        let d = Dispatcher::new(&self.config.limits);
+        let opts = DispatchOptions {
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            ..DispatchOptions::default()
+        };
+
+        let start = std::time::Instant::now();
+        let output = d.dispatch_streaming(opts, line_tx).await?;
+        let duration = start.elapsed();
+
+        let record = AuditRecord::new(
+            cwd,
+            argv.iter().map(|s| s.to_string()).collect(),
+            audit_decision,
+        );
+        AuditSink::from_config(&self.config.audit)?.write(&record)?;
+
+        Ok((output.exit_code, duration))
+    }
+
     /// Evaluate a command through the safety policy engine — FR-30–33.
     ///
     /// Returns a `(RiskAssessment, Decision)` pair. The engine is sync and
@@ -343,5 +405,46 @@ mod tests {
             result.is_ok(),
             "loose mode should allow sudo true; got: {result:?}"
         );
+    }
+
+    // ── Phase 13: dispatch_streaming ─────────────────────────────────────────
+
+    /// dispatch_streaming streams lines and returns exit code + duration.
+    #[tokio::test]
+    async fn dispatch_streaming_streams_stdout_lines() {
+        let (ls, _tmp) = ls_with_temp_audit();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = ls
+            .dispatch_streaming(&["sh", "-c", "echo hello; echo world"], tx)
+            .await;
+        assert!(result.is_ok(), "dispatch_streaming failed: {result:?}");
+        let (exit_code, _duration) = result.unwrap();
+        assert_eq!(exit_code, 0);
+        let line1 = rx.try_recv().unwrap();
+        let line2 = rx.try_recv().unwrap();
+        assert_eq!(line1, "hello");
+        assert_eq!(line2, "world");
+    }
+
+    /// dispatch_streaming blocks denied commands.
+    #[tokio::test]
+    async fn dispatch_streaming_blocks_denied_commands() {
+        let (ls, _tmp) = ls_with_temp_audit();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = ls.dispatch_streaming(&["rm", "-rf", "/"], tx).await;
+        assert!(
+            matches!(result, Err(LogicShellError::Safety(_))),
+            "expected Safety error; got: {result:?}"
+        );
+    }
+
+    /// dispatch_streaming returns correct duration.
+    #[tokio::test]
+    async fn dispatch_streaming_duration_is_positive() {
+        let (ls, _tmp) = ls_with_temp_audit();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_, duration) = ls.dispatch_streaming(&["true"], tx).await.unwrap();
+        // Duration should be non-negative (could be zero on fast systems).
+        assert!(duration.as_nanos() < 10_000_000_000, "duration too large");
     }
 }
