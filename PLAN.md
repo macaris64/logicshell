@@ -50,18 +50,18 @@
 
 ---
 
-### Phase 12 — Command input + history
+### Phase 12 — Command input + history ✅
 
 **Goal:** Full-featured input line with readline-like editing and session history.
 
 **Deliverables:**
-- `InputWidget` with cursor tracking, character insert/delete, Home/End.
-- Arrow-key history navigation (in-memory `VecDeque<String>`).
-- Ctrl-A (beginning of line), Ctrl-E (end), Ctrl-K (kill to end).
-- History persistence to `~/.local/share/logicshell/history` (one command per line, 1 000 entry cap).
-- `HistoryStore` abstraction (sync, pure) — testable without the TUI.
+- `InputWidget` with cursor tracking, character insert/delete, Home/End. ✅
+- Arrow-key history navigation (in-memory `VecDeque<String>`). ✅
+- Ctrl-A (beginning of line), Ctrl-E (end), Ctrl-K (kill to end). ✅
+- History persistence to `~/.local/share/logicshell/history` (one command per line, 1 000 entry cap). ✅
+- `HistoryStore` abstraction (sync, pure) — testable without the TUI. ✅
 
-**Tests:** InputWidget cursor math, history ring-buffer, persistence round-trip.
+**Tests:** InputWidget cursor math, history ring-buffer, persistence round-trip. ✅ (173 tests, 94.26% coverage)
 
 ---
 
