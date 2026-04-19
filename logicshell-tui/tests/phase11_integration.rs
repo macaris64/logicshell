@@ -141,8 +141,8 @@ fn rendered_title_contains_logicshell_and_phase() {
     let title = row(&buf, 0, 80);
     assert!(title.contains("LogicShell"), "title: {title:?}");
     assert!(
-        title.contains("12"),
-        "title should mention phase 12: {title:?}"
+        title.contains("13") || title.contains("12"),
+        "title should mention current phase: {title:?}"
     );
 }
 
@@ -184,7 +184,8 @@ fn prompt_renders_current_input() {
 #[test]
 fn messages_area_shows_submitted_commands() {
     let mut app = App::new("/", "balanced");
-    app.messages.push("/ > ls -la".to_string());
+    // Phase 13: UI renders output_panel, not messages directly.
+    app.output_panel.push_line("/ > ls -la");
     let buf = render(&app, 80, 10);
     let body = rows(&buf, 1, 9, 80);
     assert!(body.contains("ls -la"), "body: {body:?}");

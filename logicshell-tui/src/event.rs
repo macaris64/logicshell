@@ -13,6 +13,17 @@ pub enum Event {
     Resize(u16, u16),
 }
 
+/// Events produced by a running dispatch task and consumed by the event loop.
+#[derive(Debug, Clone)]
+pub enum DispatchEvent {
+    /// A single stdout line streamed from the child process.
+    OutputLine(String),
+    /// The child process exited with the given code and wall-clock duration.
+    Done { exit_code: i32, duration_ms: u64 },
+    /// The dispatch failed before or during execution.
+    Error(String),
+}
+
 /// Spawns a background task that forwards crossterm events and periodic ticks
 /// to the returned receiver channel.
 ///
@@ -110,5 +121,60 @@ mod tests {
             Event::Key(k) => assert_eq!(k.code, KeyCode::Char('x')),
             _ => panic!("expected Key"),
         }
+    }
+
+    // ── DispatchEvent ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_event_output_line_stores_string() {
+        let ev = DispatchEvent::OutputLine("hello".to_string());
+        match ev {
+            DispatchEvent::OutputLine(s) => assert_eq!(s, "hello"),
+            _ => panic!("expected OutputLine"),
+        }
+    }
+
+    #[test]
+    fn dispatch_event_done_stores_exit_code_and_duration() {
+        let ev = DispatchEvent::Done {
+            exit_code: 0,
+            duration_ms: 42,
+        };
+        match ev {
+            DispatchEvent::Done {
+                exit_code,
+                duration_ms,
+            } => {
+                assert_eq!(exit_code, 0);
+                assert_eq!(duration_ms, 42);
+            }
+            _ => panic!("expected Done"),
+        }
+    }
+
+    #[test]
+    fn dispatch_event_error_stores_message() {
+        let ev = DispatchEvent::Error("oops".to_string());
+        match ev {
+            DispatchEvent::Error(msg) => assert_eq!(msg, "oops"),
+            _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
+    fn dispatch_event_output_line_clone() {
+        let ev = DispatchEvent::OutputLine("x".to_string());
+        let cloned = ev.clone();
+        assert!(matches!(cloned, DispatchEvent::OutputLine(_)));
+    }
+
+    #[test]
+    fn dispatch_event_done_clone() {
+        let ev = DispatchEvent::Done {
+            exit_code: 1,
+            duration_ms: 100,
+        };
+        let cloned = ev.clone();
+        assert!(matches!(cloned, DispatchEvent::Done { .. }));
     }
 }

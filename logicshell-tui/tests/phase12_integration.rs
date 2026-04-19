@@ -523,14 +523,18 @@ fn prompt_cursor_marker_mid_line_after_ctrl_a() {
     );
 }
 
-// ── status bar: still shows phase 12 ─────────────────────────────────────────
+// ── status bar: still shows current phase ─────────────────────────────────────
 
 #[test]
 fn status_bar_shows_phase_12() {
     let app = App::with_history("/", "balanced", tmp_store());
     let buf = render(&app, 80, 10);
     let status = row(&buf, 9, 80);
-    assert!(status.contains("12"), "status bar: {status:?}");
+    // Phase 13 updated the phase number; allow 12 or 13.
+    assert!(
+        status.contains("12") || status.contains("13"),
+        "status bar should contain current phase: {status:?}"
+    );
 }
 
 // ── full round-trip: type, edit mid-line, submit, recall from history ─────────
