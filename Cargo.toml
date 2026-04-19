@@ -1,5 +1,5 @@
 [workspace]
-members = ["logicshell-core", "logicshell-llm"]
+members = ["logicshell-core", "logicshell-llm", "logicshell-tui"]
 resolver = "2"
 
 [workspace.package]
