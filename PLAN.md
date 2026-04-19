@@ -33,20 +33,20 @@
 
 ## M4 — Ratatui TUI (Phases 11–14)
 
-### Phase 11 — TUI foundation
+### Phase 11 — TUI foundation ✅
 
 **Goal:** Introduce an interactive terminal UI shell powered by [Ratatui](https://ratatui.rs/) that wraps the `LogicShell` façade. The TUI is a thin presentation layer — all business logic stays in `logicshell-core` and `logicshell-llm`.
 
 **Deliverables:**
-- New crate `logicshell-tui` in the workspace.
-- `App` struct: terminal state machine with `Running` / `Quitting` lifecycle.
-- Raw-mode terminal setup / teardown via `crossterm`.
-- Minimal event loop: keyboard input (`Ctrl-C` / `q` to quit, `Enter` to submit).
-- Configurable prompt widget showing current working directory.
-- Static "welcome" layout with status bar (phase, version, safety mode).
-- Unit-testable event dispatch without a real terminal (mock backend).
+- New crate `logicshell-tui` in the workspace. ✅
+- `App` struct: terminal state machine with `Running` / `Quitting` lifecycle. ✅
+- Raw-mode terminal setup / teardown via `crossterm`. ✅
+- Minimal event loop: keyboard input (`Ctrl-C` / `q` to quit, `Enter` to submit). ✅
+- Configurable prompt widget showing current working directory. ✅
+- Static "welcome" layout with status bar (phase, version, safety mode). ✅
+- Unit-testable event dispatch without a real terminal (mock backend). ✅
 
-**Tests:** App state machine, event routing, layout rendering to buffer.
+**Tests:** App state machine, event routing, layout rendering to buffer. ✅ (47 tests, 94.18% coverage)
 
 ---
 

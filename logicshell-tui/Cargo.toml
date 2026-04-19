@@ -1,0 +1,20 @@
+[package]
+name = "logicshell-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "LogicShell TUI: Ratatui-powered interactive terminal shell"
+
+[dependencies]
+logicshell-core = { path = "../logicshell-core" }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
